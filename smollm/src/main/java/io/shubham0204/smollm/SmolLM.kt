@@ -16,12 +16,14 @@
 
 package io.shubham0204.smollm
 
+import android.graphics.Bitmap
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -119,6 +121,7 @@ class SmolLM {
     }
 
     private var nativePtr = 0L
+    private var visionNativePtr = 0L
 
     /**
      * Provides default values for inference parameters. These values are used when the
@@ -301,19 +304,130 @@ class SmolLM {
     }
 
     /**
-     * Unloads the LLM model and releases resources. This method should be called when the SmolLM
-     * instance is no longer needed to prevent memory leaks.
+     * Loads a vision-capable GGUF model (text model + mmproj projector).
+     *
+     * @param modelPath Path to the text GGUF model.
+     * @param mmprojPath Path to the vision projector GGUF (mmproj).
+     * @param nThreads Number of CPU threads for inference.
+     * @return true if loaded successfully.
      */
+    suspend fun loadVisionModel(modelPath: String, mmprojPath: String, nThreads: Int = 4) =
+        withContext(Dispatchers.IO) {
+            visionNativePtr = loadVisionModelNative(modelPath, mmprojPath, nThreads)
+            visionNativePtr != 0L
+        }
+
+    /**
+     * Loads an image (as JPEG/PNG bytes) into the vision model for inference.
+     *
+     * @param imageBuffer Raw image bytes (JPEG, PNG, etc.)
+     * @return true if the image was loaded successfully.
+     */
+    fun loadVisionImage(imageBuffer: ByteArray): Boolean {
+        verifyVisionHandle()
+        return loadVisionImage(visionNativePtr, imageBuffer)
+    }
+
+    /**
+     * Loads a Bitmap into the vision model for inference.
+     *
+     * @param bitmap Android Bitmap to encode as JPEG and load.
+     * @return true if the image was loaded successfully.
+     */
+    fun loadVisionImage(bitmap: Bitmap): Boolean {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+        return loadVisionImage(stream.toByteArray())
+    }
+
+    /**
+     * Clears any previously loaded vision images.
+     */
+    fun clearVisionImages() {
+        if (visionNativePtr != 0L) {
+            clearVisionImages(visionNativePtr)
+        }
+    }
+
+    /**
+     * Returns the VLM response to the given query as an async Flow.
+     * The query should describe what to extract from the loaded image(s).
+     *
+     * @param query The text prompt (e.g. "Read the monitor. Return JSON: {sys, dia, bpm}. No prose.")
+     * @return A Flow of Strings streaming the response.
+     */
+    fun getVisionResponseAsFlow(query: String): Flow<String> = flow {
+        verifyVisionHandle()
+        val success = startVisionCompletion(visionNativePtr, query)
+        if (!success) {
+            throw IllegalStateException("Failed to start vision completion")
+        }
+        var piece = visionCompletionLoop(visionNativePtr)
+        while (piece != "[EOG]") {
+            emit(piece)
+            piece = visionCompletionLoop(visionNativePtr)
+        }
+        stopVisionCompletion(visionNativePtr)
+    }
+
+    /**
+     * Returns the VLM response to the given query as a blocking String.
+     *
+     * @param query The text prompt.
+     * @return The complete generated response.
+     */
+    fun getVisionResponse(query: String): String {
+        verifyVisionHandle()
+        val success = startVisionCompletion(visionNativePtr, query)
+        if (!success) {
+            throw IllegalStateException("Failed to start vision completion")
+        }
+        var piece = visionCompletionLoop(visionNativePtr)
+        var response = ""
+        while (piece != "[EOG]") {
+            response += piece
+            piece = visionCompletionLoop(visionNativePtr)
+        }
+        stopVisionCompletion(visionNativePtr)
+        return response
+    }
+
+    /**
+     * Returns the vision model response generation speed in tokens/sec.
+     */
+    fun getVisionResponseGenerationSpeed(): Float {
+        verifyVisionHandle()
+        return getVisionResponseGenerationSpeed(visionNativePtr)
+    }
+
+    /**
+     * Returns the number of tokens used in the vision model context.
+     */
+    fun getVisionContextLengthUsed(): Int {
+        verifyVisionHandle()
+        return getVisionContextSizeUsed(visionNativePtr)
+    }
+
     fun close() {
         if (nativePtr != 0L) {
             close(nativePtr)
             nativePtr = 0L
         }
+        if (visionNativePtr != 0L) {
+            closeVisionModel(visionNativePtr)
+            visionNativePtr = 0L
+        }
+    }
+
+    private fun verifyVisionHandle() {
+        assert(visionNativePtr != 0L) { "Vision model is not loaded. Use loadVisionModel() first." }
     }
 
     private fun verifyHandle() {
         assert(nativePtr != 0L) { "Model is not loaded. Use SmolLM.create to load the model" }
     }
+
+    // --- Text model native methods ---
 
     private external fun loadModel(
         modelPath: String,
@@ -342,4 +456,24 @@ class SmolLM {
     private external fun stopCompletion(modelPtr: Long)
 
     private external fun benchModel(modelPtr: Long, pp: Int, tg: Int, pl: Int, nr: Int): String
+
+    // --- Vision model native methods ---
+
+    private external fun loadVisionModelNative(modelPath: String, mmprojPath: String, nThreads: Int): Long
+
+    private external fun loadVisionImage(modelPtr: Long, imageBuffer: ByteArray): Boolean
+
+    private external fun clearVisionImages(modelPtr: Long)
+
+    private external fun startVisionCompletion(modelPtr: Long, prompt: String): Boolean
+
+    private external fun visionCompletionLoop(modelPtr: Long): String
+
+    private external fun stopVisionCompletion(modelPtr: Long)
+
+    private external fun getVisionResponseGenerationSpeed(modelPtr: Long): Float
+
+    private external fun getVisionContextSizeUsed(modelPtr: Long): Int
+
+    private external fun closeVisionModel(modelPtr: Long)
 }

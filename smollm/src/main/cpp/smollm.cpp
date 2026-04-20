@@ -1,5 +1,11 @@
 #include "LLMInference.h"
+#include "VisionInference.h"
 #include <jni.h>
+#include <android/bitmap.h>
+
+// ============================================================================
+// Text Model JNI Methods (existing)
+// ============================================================================
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_io_shubham0204_smollm_SmolLM_loadModel(JNIEnv* env, jobject thiz, jstring modelPath, jfloat minP,
@@ -95,4 +101,91 @@ Java_io_shubham0204_smollm_SmolLM_benchModel(JNIEnv* env, jobject /*unused*/, jl
     auto*       llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     std::string result       = llmInference->benchModel(pp, tg, pl, nr);
     return env->NewStringUTF(result.c_str());
+}
+
+// ============================================================================
+// Vision Model JNI Methods (new)
+// ============================================================================
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_io_shubham0204_smollm_SmolLM_loadVisionModelNative(JNIEnv* env, jobject /*thiz*/, jstring modelPath, jstring mmprojPath,
+                                                  jint nThreads) {
+    jboolean    isCopy        = true;
+    const char* modelPathCstr = env->GetStringUTFChars(modelPath, &isCopy);
+    const char* mmprojPathCstr = env->GetStringUTFChars(mmprojPath, &isCopy);
+
+    auto* visionInference = new VisionInference();
+    bool  success         = visionInference->loadModel(modelPathCstr, mmprojPathCstr, nThreads);
+
+    env->ReleaseStringUTFChars(modelPath, modelPathCstr);
+    env->ReleaseStringUTFChars(mmprojPath, mmprojPathCstr);
+
+    if (!success) {
+        delete visionInference;
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to load vision model");
+        return 0;
+    }
+
+    return reinterpret_cast<jlong>(visionInference);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_shubham0204_smollm_SmolLM_loadVisionImage(JNIEnv* env, jobject /*thiz*/, jlong modelPtr, jbyteArray imageBuffer) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+
+    jsize   len     = env->GetArrayLength(imageBuffer);
+    jbyte*  buf     = env->GetByteArrayElements(imageBuffer, nullptr);
+    bool    success = visionInference->loadImageFromBuffer(reinterpret_cast<const unsigned char*>(buf), len);
+
+    env->ReleaseByteArrayElements(imageBuffer, buf, JNI_ABORT);
+    return static_cast<jboolean>(success);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_shubham0204_smollm_SmolLM_clearVisionImages(JNIEnv* env, jobject /*thiz*/, jlong modelPtr) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+    visionInference->clearImages();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_shubham0204_smollm_SmolLM_startVisionCompletion(JNIEnv* env, jobject /*thiz*/, jlong modelPtr, jstring prompt) {
+    jboolean    isCopy      = true;
+    const char* promptCstr  = env->GetStringUTFChars(prompt, &isCopy);
+    auto*       visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+
+    bool success = visionInference->startCompletion(promptCstr);
+
+    env->ReleaseStringUTFChars(prompt, promptCstr);
+    return static_cast<jboolean>(success);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_io_shubham0204_smollm_SmolLM_visionCompletionLoop(JNIEnv* env, jobject /*thiz*/, jlong modelPtr) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+    std::string response = visionInference->completionLoop();
+    return env->NewStringUTF(response.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_shubham0204_smollm_SmolLM_stopVisionCompletion(JNIEnv* env, jobject /*thiz*/, jlong modelPtr) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+    visionInference->stopCompletion();
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_io_shubham0204_smollm_SmolLM_getVisionResponseGenerationSpeed(JNIEnv* env, jobject /*thiz*/, jlong modelPtr) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+    return visionInference->getResponseGenerationTime();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_io_shubham0204_smollm_SmolLM_getVisionContextSizeUsed(JNIEnv* env, jobject /*thiz*/, jlong modelPtr) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+    return visionInference->getContextSizeUsed();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_shubham0204_smollm_SmolLM_closeVisionModel(JNIEnv* env, jobject /*thiz*/, jlong modelPtr) {
+    auto* visionInference = reinterpret_cast<VisionInference*>(modelPtr);
+    delete visionInference;
 }

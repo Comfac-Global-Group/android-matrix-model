@@ -81,8 +81,10 @@ import io.shubham0204.smollmandroid.ui.components.noRippleClickable
 import io.shubham0204.smollmandroid.ui.preview.dummyChats
 import io.shubham0204.smollmandroid.ui.preview.dummyFolders
 import io.shubham0204.smollmandroid.ui.screens.chat.dialogs.createFolderOptionsDialog
+import io.shubham0204.smollmandroid.ui.screens.bpapp.BpAppWebViewActivity
 import io.shubham0204.smollmandroid.ui.screens.manage_asr.ManageASRActivity
 import io.shubham0204.smollmandroid.ui.screens.manage_tasks.ManageTasksActivity
+import io.shubham0204.smollmandroid.ui.screens.vision_hub.VisionHubActivity
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
 
@@ -100,7 +102,9 @@ private fun PreviewChatsAndFoldersList() {
             onDeleteFolderWithChatsClick = {},
             onUpdateFolder = {},
             onAddFolder = {},
-            onManageASRClick = {}
+            onManageASRClick = {},
+            onVisionHubClick = {},
+            onBpAppClick = {}
         )
     }
 }
@@ -172,6 +176,18 @@ fun DrawerUI(
                     }
                     onCloseDrawer()
                 },
+                onVisionHubClick = {
+                    Intent(context, VisionHubActivity::class.java).also {
+                        context.startActivity(it)
+                    }
+                    onCloseDrawer()
+                },
+                onBpAppClick = {
+                    Intent(context, BpAppWebViewActivity::class.java).also {
+                        context.startActivity(it)
+                    }
+                    onCloseDrawer()
+                },
                 onItemClick = {
                     onEvent(ChatScreenUIEvent.ChatEvents.SwitchChat(it))
                     onCloseDrawer()
@@ -199,6 +215,8 @@ private fun ChatsAndFoldersList(
     folders: ImmutableList<Folder>,
     onManageTasksClick: () -> Unit,
     onManageASRClick: () -> Unit,
+    onVisionHubClick: () -> Unit,
+    onBpAppClick: () -> Unit,
     onItemClick: (Chat) -> Unit,
     onDeleteFolderClick: (Folder) -> Unit,
     onDeleteFolderWithChatsClick: (Folder) -> Unit,
@@ -238,6 +256,44 @@ private fun ChatsAndFoldersList(
             )
             Text(
                 "Manage Speech-to-Text",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onVisionHubClick() },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                FeatherIcons.PlusSquare,
+                contentDescription = "Vision Hub",
+                tint = MaterialTheme.colorScheme.secondary,
+            )
+            Text(
+                "Vision Hub",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onBpAppClick() },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                FeatherIcons.Plus,
+                contentDescription = "BP Log",
+                tint = MaterialTheme.colorScheme.secondary,
+            )
+            Text(
+                "🩺 BP Log",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier
                     .fillMaxWidth()

@@ -460,7 +460,217 @@ SYS: <number>, DIA: <number>, PULSE: <number>
 
 ---
 
-## 10. Appendix: Key Files & References
+## 10. bp-app Integration Contract
+
+This section defines the wire-level contract and expected behaviour when **bp-app** (the blood-pressure PWA at `bp.comfac-it.com`) uses AMM as its OCR engine. It supersedes the single-row summary in §4.6 and the Phase-3 checklist in §8 — callers and implementers treat this as the authoritative interface for Phase 1.
+
+### 10.1 Role of AMM in bp-app's engine ladder
+
+AMM is **one engine in a fallback ladder**, not a required dependency. bp-app must continue to function on any phone whether AMM is installed or not. AMM's value is quality, not presence — it is the best-accuracy on-device option and is tried first when available.
+
+Empirical baseline from `bp-app/experiments/OCR_BENCHMARK_REPORT.md` (2026-04-19, 7-image sample set):
+
+| Engine | Accuracy (FULL_MATCH) | Notes |
+|---|---|---|
+| Qwen 3.5 4B Instruct + rotate90 | 1/1 so far; full sweep pending | Current AMM target model |
+| Gemma 4:e2b + rotate90 | 4/4 rotated variants | Too large (7.2 GB) for default ship |
+| MedGemma + contrast | 13/42 (31%) | Fastest, no rotation needed |
+| Qwen 3.5 0.8B + original | 10/42 (24%) | Smallest viable model |
+| Browser 7-segment template matcher | ~80% with manual ROI | Pure JS; zero model |
+| Tesseract.js / ocrad.js | 0/11 across 843+ variants | Removed from ladder |
+
+AMM Phase 1 must beat this baseline on bp-app's sample set before it is promoted above the browser-local engines.
+
+### 10.2 Capability handshake
+
+bp-app probes AMM **once on startup**:
+
+```http
+GET http://127.0.0.1:8765/v1/status
+→ 200 OK
+  {
+    "version": "1.0.0",
+    "ready": true,
+    "capabilities": ["vision"],
+    "models": { "vision": "qwen2.5-vl-3b" },
+    "queue_depth": 0,
+    "inference_mode": "local"
+  }
+```
+
+- Probe succeeds + `capabilities` includes `"vision"` → bp-app shows a green "AMM detected" pill in Settings and places AMM at the top of the ladder.
+- Probe fails (refused / timeout / non-200) → bp-app silently removes AMM from the ladder. The absence of AMM is the default state; no error is surfaced on startup.
+- Result is cached per session. A Settings button **"Re-detect AMM"** forces a fresh probe.
+
+### 10.3 Transport & mixed-content (PNA) — Phase 0 gate
+
+bp-app is served over HTTPS at `https://bp.comfac-it.com`. AMM serves plain HTTP on `http://127.0.0.1:8765`. This crosses Chrome's Private Network Access (PNA) boundary, which requires a CORS preflight on HTTPS → loopback. Safari on iOS currently does **not** grant this exception at all.
+
+**AMM must respond to `OPTIONS` preflights with:**
+
+```
+Access-Control-Allow-Origin: https://bp.comfac-it.com
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Allow-Private-Network: true
+```
+
+and include `Access-Control-Allow-Origin` on every real response.
+
+**Phase 0 gate:** before any Phase-1 engineering begins, a 20-line stub HTTP server (Termux Python / Node) on a real Android device must be confirmed reachable from `bp.comfac-it.com` in Chrome Android. If the PNA preflight is silently dropped or rejected, Phase 1 pivots to a **native Android bp-app client**, not a continued PWA path. Do not build Phase 1 on assumption.
+
+### 10.4 Vision request / response contract
+
+The single endpoint bp-app hits during Phase 1:
+
+```http
+POST http://127.0.0.1:8765/v1/vision/completions
+Content-Type: application/json
+
+{
+  "image": "<base64 JPEG, long-edge ≤ 1920 px, pre-rotated 90° CW by bp-app>",
+  "prompt": "<caller-provided, see §10.5>",
+  "response_schema": {
+    "type": "object",
+    "required": ["sys", "dia", "bpm"],
+    "properties": {
+      "sys": { "type": ["integer", "null"] },
+      "dia": { "type": ["integer", "null"] },
+      "bpm": { "type": ["integer", "null"] }
+    }
+  },
+  "temperature": 0.1,
+  "max_tokens": 64
+}
+```
+
+**Happy-path response:**
+
+```json
+{
+  "text": "{\"sys\":118,\"dia\":78,\"bpm\":59}",
+  "parsed": { "sys": 118, "dia": 78, "bpm": 59 },
+  "usage": { "tokens": 23, "ms": 4120 }
+}
+```
+
+**Schema-retry failure:**
+
+```json
+{ "text": "<raw>", "parsed": null, "error": "schema_retry_failed" }
+```
+
+- bp-app sets a 15-second `AbortSignal` on the fetch.
+- On timeout or 5xx, bp-app moves to the next engine and records the failure locally (no telemetry leaves the device).
+- **Image preprocessing is bp-app's responsibility, not AMM's.** rotate 90° CW, resize to 1920 px long edge, JPEG q90. AMM does not apply orientation or resize transforms — different monitors (Omron wrist vs. arm, A&D, Microlife) may need different client-side rotations in future.
+
+### 10.5 Caller-provided prompt
+
+AMM ships **no BP-specific prompt**. bp-app supplies the prompt on every request, so users can tune wording per monitor layout or language without an AMM release.
+
+bp-app ships two presets:
+
+**Minimal (default — terse prompts empirically win on small VLMs):**
+```
+Read the three numbers on this blood pressure monitor display.
+Return JSON: {"sys": <top>, "dia": <middle>, "bpm": <bottom>}.
+No prose, no markdown.
+```
+
+**Verbose (opt-in, for hard photos):** the paragraph-length prompt in `bp-app/BP-FRD.md §4.3` — explicit SYS/DIA/BPM ranges, 7-segment description, null handling.
+
+Users can edit either preset in Settings → VLM → Prompt Editor. Edited prompts persist in `localStorage` under `bplog_vlm_prompt`. A "Reset to default" button restores the minimal preset.
+
+### 10.6 Client-side validation & derived confidence
+
+bp-app does **not** trust a VLM's self-reported confidence field (a 1–3 GB model will mostly say "high" regardless). Confidence is derived client-side after extraction:
+
+| Check | Range | Fails →  |
+|---|---|---|
+| Systolic | 90–220 mmHg | red |
+| Diastolic | 50–130 mmHg | red |
+| BPM | 40–180 | red |
+| Pulse pressure (sys − dia) | 20–100 | amber |
+| Diastolic < Systolic | — | red |
+
+- All pass → green ticks; Save button auto-focused.
+- Any amber → amber warning; Save still enabled.
+- Any red → red warning; Save disabled until corrected.
+
+All fields remain editable. AMM's output is **advisory, not authoritative.**
+
+### 10.7 Engine fallback order
+
+bp-app tries engines in this order, stopping at the first physiologically-valid result:
+
+1. **AMM** — handshake succeeded at startup.
+2. **Local Ollama** — `GET /api/tags` returns a vision model and user enabled this engine.
+3. **OpenAI-compatible API** — API key configured and `navigator.onLine === true`.
+4. **Browser 7-segment template matcher** — pure-JS; user drags a box over the LCD; ~80% accuracy, no network or model.
+5. **Manual entry** — always available; pre-filled with any partial data gathered above.
+
+On fall-through, bp-app shows a single subtle toast: `"AMM couldn't read — trying <next>…"`. Users can opt out of individual engines in Settings.
+
+**Note on ocrad.js:** the prior v1.2 plan had ocrad.js as the final automated tier. `bp-app/experiments/OCR_BENCHMARK_REPORT.md` shows 0/11 full-matches across 843+ preprocessing variants; ocrad.js is removed from this ladder and from bp-app's default bundle.
+
+### 10.8 User-facing controls in bp-app
+
+Settings → **"VLM / OCR Engines"**:
+
+- Master toggle **Use AI-powered OCR** — off disables every engine except the template matcher and manual entry; no network or loopback calls are made.
+- Per-engine toggles with status pill — green (ready), amber (configured but unreachable), grey (not configured).
+- Drag-to-reorder priority list.
+- Prompt editor (minimal / verbose / custom).
+- OpenAI endpoint URL + API key (plain `localStorage`; documented trade-off for a self-hosted personal tool).
+- **Re-detect AMM** button.
+
+Capture flow is unchanged by engine choice — users take a photo, AMM/fallback runs automatically, and the prompt editor is out-of-band in Settings.
+
+### 10.9 Privacy boundary
+
+| Engine | Data leaves device? |
+|---|---|
+| AMM (local model) | No — 127.0.0.1 only |
+| AMM (proxy → Ollama local) | No |
+| AMM (proxy → OpenAI) | Yes — to user-configured endpoint only |
+| Ollama (direct) | No |
+| OpenAI-compatible (direct) | Yes — to user-configured endpoint only |
+| 7-segment template matcher | No |
+| Manual entry | No |
+
+bp-app shows an explicit **"This photo will leave your device"** confirmation before any non-loopback request. Users can set "don't ask again for this endpoint"; default is to ask every time.
+
+### 10.10 End-to-end sequence
+
+**Happy path (AMM available, clean photo):**
+
+```
+1. User taps "Take Photo" → captures BP monitor.
+2. bp-app extracts EXIF timestamp via exifr.
+3. bp-app rotates image 90° CW, resizes to 1920 px, JPEG-encodes at q90.
+4. bp-app POSTs /v1/vision/completions with image + minimal prompt + schema.
+5. AMM decodes base64 → mtmd_bitmap_init → mtmd_tokenize → llama_decode.
+6. AMM returns JSON; bp-app parses + range-validates (§10.6).
+7. Green ticks on each field; user taps Save; entry written to IndexedDB.
+```
+
+**Target latency on mid-range 2024 Android: ≤ 5 s end-to-end.**
+
+**Failure path (AMM times out):**
+
+```
+4a. AMM fetch aborts at 15 s.
+4b. bp-app logs failure locally, shows fallback toast, tries Ollama.
+4c. Ollama unreachable → tries OpenAI (if configured).
+4d. OpenAI succeeds → same validation path as AMM.
+4e. All engines fail → template matcher prompt → manual entry.
+```
+
+Exit criteria for AMM's Phase 1 against bp-app are defined in §6 Phase 3 and tracked in `bp-app/experiments/`. The canonical metric is **FULL_MATCH ≥ 5/7 on the `Bloodpressure Samples/` set** with median latency ≤ 5 s; missing either triggers a model re-sweep before Phase 1 ships.
+
+---
+
+## 11. Appendix: Key Files & References
 
 ### llama.cpp mtmd docs (in submodule)
 - `tools/mtmd/README.md` — multimodal overview
@@ -483,10 +693,15 @@ SYS: <number>, DIA: <number>, PULSE: <number>
 
 ---
 
-## 11. Decision Log
+## 12. Decision Log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-04-18 | Documented vision FDR | bp-app needs on-device vision; SmolChat has the hardware (mtmd in submodule) but not the wiring |
 | 2026-04-18 | Recommended Phase 1 = standalone service | Fastest path to validation; decouples from SmolChat UI complexity |
 | 2026-04-18 | Recommended model = Qwen2.5-VL 3B | Best accuracy/size trade-off for OCR; proven 7-segment LCD reading capability |
+| 2026-04-20 | Added §10 bp-app Integration Contract | §4.6 and §8 only sketched the interface; §10 pins down the wire contract, prompt ownership, preprocessing responsibility, PNA gate, and fallback order so AMM and bp-app can be built to one spec |
+| 2026-04-20 | bp-app owns rotate90 + resize, not AMM | Client-side preprocessing varies per monitor model; AMM stays monitor-agnostic |
+| 2026-04-20 | Confidence is derived client-side, not reported by VLM | Small VLMs are unreliable confidence-reporters; range checks are cheap and deterministic |
+| 2026-04-20 | ocrad.js removed from fallback ladder | `bp-app/experiments/OCR_BENCHMARK_REPORT.md` shows 0/11 FULL_MATCH across 843+ variants — dead tier |
+| 2026-04-20 | PNA preflight treated as Phase 0 go/no-go | If Chrome/Safari block HTTPS → loopback, the whole PWA-to-AMM model fails; must be verified before Phase 1 engineering starts |

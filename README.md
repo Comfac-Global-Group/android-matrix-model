@@ -1,5 +1,40 @@
 <img src="resources/app_icon/icon.png" alt="app icon" width="256"/>
 
+# AMM — Android Matrix Models
+
+> **Fork of SmolChat-Android**, rebranded and extended as a self-hosted on-device AI hub.
+> Other apps talk to AMM over a local HTTP API (`127.0.0.1:8765`) to run vision, text, and speech workloads without leaving the phone.
+
+## Quick Start for Developers
+
+### HTTP API
+
+AMM exposes a localhost-only HTTP server for cross-app integration:
+
+```bash
+# Health check
+GET http://127.0.0.1:8765/health
+→ {"status":"ok"}
+
+# Vision inference (multipart form)
+POST http://127.0.0.1:8765/vision
+  image: <JPEG/PNG file>
+  prompt: "Read the monitor. Return JSON: {sys, dia, bpm}. No prose."
+→ {"success":true,"response":"{\"sys\":120,\"dia\":80,\"bpm\":72}","tokens_per_sec":1.5,"context_used":123}
+```
+
+### BP-app Integration
+
+bp-app (`https://bp.comfac-it.com`) calls AMM as its **primary OCR engine**:
+1. User captures BP monitor photo
+2. bp-app rotates image 90° (rotate90 preprocessing)
+3. bp-app `POST`s image + prompt to `http://127.0.0.1:8765/vision`
+4. AMM returns JSON → bp-app validates ranges → shows result
+
+If AMM is unavailable, bp-app falls back to Ollama → OpenAI → 7-segment template matcher → manual entry.
+
+---
+
 # SmolChat - On-Device Inference of SLMs in Android
 
 <table>

@@ -48,7 +48,7 @@ jobs:
       - name: Rename APK
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk \
-             SmolChat_${{ github.event.inputs.release_tag }}_debug.apk
+             AMM_${{ github.event.inputs.release_tag }}_debug.apk
 
       - name: Create release with APK asset
         env:
@@ -63,5 +63,5 @@ jobs:
           2. Tap it; allow install from unknown sources when prompted
           3. Open the app and start downloading a GGUF model
 
-          Note: this is a debug-signed build. If you have a release-signed SmolChat already installed, uninstall it first — signatures won't match for upgrade." \
-            "SmolChat_${{ github.event.inputs.release_tag }}_debug.apk"
+          Note: this is a debug-signed build. If you have a release-signed AMM already installed, uninstall it first — signatures won't match for upgrade." \
+            "AMM_${{ github.event.inputs.release_tag }}_debug.apk"

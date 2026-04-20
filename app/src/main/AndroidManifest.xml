@@ -6,6 +6,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".SmolChatApplication"
@@ -17,17 +20,17 @@
         android:localeConfig="@xml/locales_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SmolLMAndroid"
+        android:theme="@style/Theme.AMM"
         tools:targetApi="31">
         <activity
             android:name=".ui.screens.manage_asr.ManageASRActivity"
             android:exported="false"
             android:label="@string/title_activity_app_settings"
-            android:theme="@style/Theme.SmolLMAndroid" />
+            android:theme="@style/Theme.AMM" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.SmolLMAndroid">
+            android:theme="@style/Theme.AMM">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -51,6 +54,22 @@
         </activity>
         <activity android:name=".ui.screens.model_download.DownloadModelActivity" />
         <activity android:name=".ui.screens.manage_tasks.ManageTasksActivity" />
+        <activity
+            android:name=".ui.screens.vision_hub.VisionHubActivity"
+            android:exported="false"
+            android:label="🎯 Vision Hub"
+            android:theme="@style/Theme.AMM" />
+        <activity
+            android:name=".ui.screens.bpapp.BpAppWebViewActivity"
+            android:exported="false"
+            android:label="🩺 BP Log"
+            android:theme="@style/Theme.AMM" />
+
+        <service
+            android:name=".llm.HttpService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

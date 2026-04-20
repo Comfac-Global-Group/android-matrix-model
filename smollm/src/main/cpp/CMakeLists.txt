@@ -8,6 +8,15 @@ get_filename_component(LLAMA_DIR ${LLAMA_DIR_RELATIVE} ABSOLUTE)
 set(GGML_DIR ${LLAMA_DIR}/ggml)
 set(COMMON_DIR ${LLAMA_DIR}/common)
 set(VENDOR_DIR ${LLAMA_DIR}/vendor)
+set(MTMD_DIR ${LLAMA_DIR}/tools/mtmd)
+
+# Ensure LLAMA_INSTALL_VERSION is defined for mtmd's set_target_properties
+if (NOT DEFINED LLAMA_INSTALL_VERSION)
+    set(LLAMA_INSTALL_VERSION "0.0.0")
+endif()
+
+# Build mtmd (multimodal) library
+add_subdirectory(${MTMD_DIR} mtmd)
 
 # -fvisibility=hidden: hide all symbols by default
 # -fvisibility-inlines-hidden: hide all inline symbols by default
@@ -38,6 +47,7 @@ function(build_library target_name)
             ${target_name}
             SHARED
             LLMInference.cpp
+            VisionInference.cpp
             smollm.cpp
     )
     target_include_directories(
@@ -49,6 +59,8 @@ function(build_library target_name)
             ${GGML_DIR}/src/ggml-cpu
             ${LLAMA_DIR}/include
             ${VENDOR_DIR}
+            ${MTMD_DIR}
+            ${VENDOR_DIR}/stb
     )
     # -fvisibility=hidden: hide all symbols by default
     # -fvisibility-inlines-hidden: hide all inline symbols by default
@@ -66,7 +78,12 @@ function(build_library target_name)
     )
     target_link_libraries(
             ${target_name}
-            android log llama common vulkan
+            android log llama common vulkan mtmd
+    )
+    target_compile_features(
+            ${target_name}
+            PRIVATE
+            cxx_std_17
     )
     # -Wl,--gc-sections: remove unused sections (garbage collection)
     # -flto: link-time optimization
