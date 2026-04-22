@@ -10,10 +10,8 @@
 
 package io.shubham0204.smollmandroid.ui.screens.browser
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.DownloadManager
-import androidx.lifecycle.lifecycleScope
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -22,16 +20,6 @@ import android.os.Bundle
 import android.os.Environment
 import android.util.Base64
 import android.view.View
-import android.webkit.ConsoleMessage
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.URLUtil
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -91,6 +79,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.lifecycleScope
 import io.shubham0204.smollmandroid.data.AppDB
 import io.shubham0204.smollmandroid.llm.HttpService
 import io.shubham0204.smollmandroid.llm.VisionLMManager
@@ -103,11 +92,28 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import org.koin.android.ext.android.inject
+import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.StorageController
+import org.mozilla.geckoview.WebResponse
 import java.net.URL
 
 /**
- * Full browser activity for AMM. Self-contained — never delegates http/https to external browsers.
+ * Full browser activity for AMM using GeckoView (Firefox engine).
+ * Self-contained — never delegates http/https to external browsers.
  * Supports bookmarks, history, downloads, find-in-page, fullscreen video, and PWA "Add to Home Screen".
+ *
+ * Migration from WebView (Chromium) → GeckoView (Firefox):
+ * - WebView replaced by GeckoView + GeckoSession
+ * - WebViewClient replaced by NavigationDelegate
+ * - WebChromeClient replaced by ProgressDelegate + ContentDelegate + PromptDelegate
+ * - addJavascriptInterface replaced by window.prompt() interception (GeckoView has no native JS bridge)
+ * - Downloads handled via ContentDelegate.onExternalResponse
  */
 class BrowserActivity : ComponentActivity() {
 
@@ -120,28 +126,41 @@ class BrowserActivity : ComponentActivity() {
     private val visionLMManager: VisionLMManager by inject()
     private val okHttpClient = OkHttpClient()
 
-    private lateinit var webView: WebView
-    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private lateinit var geckoView: GeckoView
+    private lateinit var geckoSession: GeckoSession
+    private lateinit var geckoRuntime: GeckoRuntime
+    private var pendingFilePrompt: GeckoSession.PromptDelegate.FilePrompt? = null
+    private var pendingFileResult: GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? = null
     private var customView: View? = null
-    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private var sessionCurrentUrl: String = ""
+    private var sessionTitle: String = ""
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
-                val clipData = result.data?.clipData
-                val uri = result.data?.data
-                val results: Array<Uri>? = when {
-                    clipData != null && clipData.itemCount > 0 -> {
-                        Array(clipData.itemCount) { clipData.getItemAt(it).uri }
+            val prompt = pendingFilePrompt
+            val gr = pendingFileResult
+            if (prompt != null && gr != null) {
+                if (result.resultCode == Activity.RESULT_OK) {
+                    val clipData = result.data?.clipData
+                    val uri = result.data?.data
+                    val results: Array<Uri>? = when {
+                        clipData != null && clipData.itemCount > 0 -> {
+                            Array(clipData.itemCount) { clipData.getItemAt(it).uri }
+                        }
+                        uri != null -> arrayOf(uri)
+                        else -> null
                     }
-                    uri != null -> arrayOf(uri)
-                    else -> null
+                    if (results != null) {
+                        gr.complete(prompt.confirm(this@BrowserActivity, results))
+                    } else {
+                        gr.complete(prompt.dismiss())
+                    }
+                } else {
+                    gr.complete(prompt.dismiss())
                 }
-                filePathCallback?.onReceiveValue(results)
-            } else {
-                filePathCallback?.onReceiveValue(null)
+                pendingFilePrompt = null
+                pendingFileResult = null
             }
-            filePathCallback = null
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -158,8 +177,17 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun createConfiguredWebView(
+    private fun getOrCreateRuntime(): GeckoRuntime {
+        if (!::geckoRuntime.isInitialized) {
+            val settings = GeckoRuntimeSettings.Builder()
+                .debugLogging(true)
+                .build()
+            geckoRuntime = GeckoRuntime.create(this, settings)
+        }
+        return geckoRuntime
+    }
+
+    private fun createConfiguredGeckoView(
         onPageStarted: () -> Unit,
         onPageFinished: (String) -> Unit,
         onProgress: (Int) -> Unit,
@@ -169,198 +197,260 @@ class BrowserActivity : ComponentActivity() {
         onUrlChanged: (String) -> Unit,
         onManifestDetected: (String) -> Unit,
         onFullscreen: (Boolean) -> Unit,
-    ): WebView {
-        webView = WebView(this).apply {
-            settings.apply {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                cacheMode = WebSettings.LOAD_DEFAULT
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                allowFileAccess = true
-                allowContentAccess = true
-                mediaPlaybackRequiresUserGesture = false
-                builtInZoomControls = true
-                displayZoomControls = false
-                loadWithOverviewMode = true
-                useWideViewPort = true
+    ): GeckoView {
+        val runtime = getOrCreateRuntime()
+
+        geckoSession = GeckoSession(GeckoSessionSettings.Builder().build()).apply {
+            // Progress tracking
+            progressDelegate = object : GeckoSession.ProgressDelegate {
+                override fun onPageStart(session: GeckoSession, url: String) {
+                    onPageStarted()
+                }
+
+                override fun onPageStop(session: GeckoSession, success: Boolean) {
+                    onPageFinished(sessionCurrentUrl)
+                    onTitleChanged.invoke(sessionTitle)
+                    onUrlChanged.invoke(sessionCurrentUrl)
+
+                    // Inject AMM JS bridge after page load
+                    injectAmmBridge()
+
+                    // Detect manifest
+                    val manifestScript = """
+                        (function() {
+                            var link = document.querySelector('link[rel="manifest"]');
+                            if (link) return link.href;
+                            return '';
+                        })()
+                    """.trimIndent()
+                    session.loadUri("javascript:$manifestScript")
+                }
+
+                override fun onProgressChange(session: GeckoSession, progress: Int) {
+                    onProgress(progress)
+                }
+
+                override fun onSecurityChange(
+                    session: GeckoSession,
+                    securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
+                ) {
+                    // no-op
+                }
             }
 
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(
-                    view: WebView?,
-                    request: WebResourceRequest?,
-                ): Boolean {
-                    val url = request?.url?.toString() ?: return false
+            // Navigation handling
+            navigationDelegate = object : GeckoSession.NavigationDelegate {
+                override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                    onCanGoBackChanged(canGoBack)
+                }
+
+                override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                    onCanGoForwardChanged(canGoForward)
+                }
+
+                override fun onLoadRequest(
+                    session: GeckoSession,
+                    request: GeckoSession.NavigationDelegate.LoadRequest
+                ): GeckoResult<AllowOrDeny>? {
+                    val url = request.uri
                     return when {
                         url.startsWith("mailto:") -> {
                             startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse(url)))
-                            true
+                            GeckoResult.fromValue(AllowOrDeny.DENY)
                         }
                         url.startsWith("tel:") -> {
                             startActivity(Intent(Intent.ACTION_DIAL, Uri.parse(url)))
-                            true
+                            GeckoResult.fromValue(AllowOrDeny.DENY)
                         }
                         url.startsWith("intent:") -> {
                             try {
                                 val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
                                 if (intent.resolveActivity(packageManager) != null) {
                                     startActivity(intent)
-                                    true
+                                    GeckoResult.fromValue(AllowOrDeny.DENY)
                                 } else {
-                                    false
+                                    null // ALLOW
                                 }
                             } catch (e: Exception) {
-                                false
+                                null // ALLOW
                             }
                         }
                         else -> {
-                            // Keep all http/https and other URLs inside the WebView
-                            false
-                        }
-                    }
-                }
-
-                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                    super.onPageStarted(view, url, favicon)
-                    onPageStarted()
-                }
-
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    super.onPageFinished(view, url)
-                    url?.let { onPageFinished(it) }
-                    onCanGoBackChanged.invoke(canGoBack())
-                    onCanGoForwardChanged.invoke(canGoForward())
-                    onTitleChanged.invoke(title ?: "")
-                    onUrlChanged.invoke(url ?: "")
-
-                    // Inject JS to detect manifest
-                    view?.evaluateJavascript(
-                        """
-                        (function() {
-                            var link = document.querySelector('link[rel="manifest"]');
-                            if (link) return link.href;
-                            return '';
-                        })()
-                        """.trimIndent()
-                    ) { result ->
-                        val manifestUrl = result?.trim('"') ?: ""
-                        if (manifestUrl.isNotBlank()) {
-                            onManifestDetected(manifestUrl)
+                            // Keep all http/https inside the browser
+                            null // ALLOW
                         }
                     }
                 }
             }
 
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    onProgress(newProgress)
-                }
+            // Prompts: file chooser + JS bridge via window.prompt()
+            promptDelegate = object : GeckoSession.PromptDelegate {
+                override fun onFilePrompt(
+                    session: GeckoSession,
+                    prompt: GeckoSession.PromptDelegate.FilePrompt
+                ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? {
+                    pendingFilePrompt = prompt
+                    val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                    pendingFileResult = result
 
-                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                    android.util.Log.d(
-                        "BrowserActivity",
-                        "[${consoleMessage?.sourceId()}:${consoleMessage?.lineNumber()}] ${consoleMessage?.message()}"
-                    )
-                    return true
-                }
-
-                override fun onShowFileChooser(
-                    webView: WebView?,
-                    filePathCallback: ValueCallback<Array<Uri>>?,
-                    fileChooserParams: FileChooserParams?,
-                ): Boolean {
-                    this@BrowserActivity.filePathCallback = filePathCallback
-                    val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "image/*"
+                        type = "*/*"
+                        val mimeTypes = prompt.mimeTypes
+                        if (mimeTypes != null && mimeTypes.isNotEmpty()) {
+                            putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                        }
+                        if (prompt.type == GeckoSession.PromptDelegate.FilePrompt.Type.MULTIPLE) {
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
                     }
                     fileChooserLauncher.launch(intent)
-                    return true
+                    return result
                 }
 
-                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
-                    customView = view
-                    customViewCallback = callback
-                    onFullscreen(true)
-                }
-
-                override fun onHideCustomView() {
-                    customViewCallback?.onCustomViewHidden()
-                    customView = null
-                    customViewCallback = null
-                    onFullscreen(false)
+                override fun onTextPrompt(
+                    session: GeckoSession,
+                    prompt: GeckoSession.PromptDelegate.TextPrompt
+                ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? {
+                    // Intercept bridge prompts (window.prompt uses text prompt)
+                    if (prompt.title == "amm-bridge") {
+                        val response = handleBridgeRequest(prompt.message ?: "{}")
+                        return GeckoResult.fromValue(prompt.confirm(response))
+                    }
+                    return super.onTextPrompt(session, prompt)
                 }
             }
 
-            setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-                val request = DownloadManager.Request(Uri.parse(url)).apply {
-                    setMimeType(mimetype)
-                    addRequestHeader("User-Agent", userAgent)
-                    setDescription("Downloading file...")
-                    setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
-                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
+            // Content delegate: console messages, fullscreen, downloads
+            contentDelegate = object : GeckoSession.ContentDelegate {
+                override fun onCrash(session: GeckoSession) {
+                    android.util.Log.e("BrowserActivity", "GeckoSession crashed")
                 }
-                val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-                dm.enqueue(request)
+
+                override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                    onFullscreen(fullScreen)
+                }
+
+                override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                    // Handle downloads
+                    val url = response.uri
+                    val fileName = response.headers["Content-Disposition"]
+                        ?.let { cd ->
+                            val match = Regex("filename=\"?([^\";]+)\"?").find(cd)
+                            match?.groupValues?.get(1)
+                        }
+                        ?: url.substringAfterLast('/').substringBefore('?')
+                        .ifBlank { "download" }
+                    val mimeType = response.headers["Content-Type"] ?: "application/octet-stream"
+
+                    val dmRequest = DownloadManager.Request(Uri.parse(url)).apply {
+                        setMimeType(mimeType)
+                        setDescription("Downloading file...")
+                        setTitle(fileName)
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                    }
+                    val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                    dm.enqueue(dmRequest)
+                }
             }
 
-            clearCache(true)
-            clearHistory()
-            CookieManager.getInstance().removeAllCookies(null)
-
-            addJavascriptInterface(AmmBridge(), "AMMBridge")
+            open(runtime)
         }
-        return webView
+
+        geckoView = GeckoView(this).apply {
+            setSession(geckoSession)
+        }
+
+        // Clear cookies and storage for a fresh session
+        runtime.storageController.clearData(
+            StorageController.ClearFlags.ALL
+        )
+
+        return geckoView
     }
 
-    inner class AmmBridge {
-        @JavascriptInterface
-        fun isEmbedded(): Boolean = true
-
-        @JavascriptInterface
-        fun getAmmVersion(): String = "1.1.4"
-
-        @JavascriptInterface
-        fun isHttpServiceRunning(): Boolean = HttpService.isRunning
-
-        @JavascriptInterface
-        fun isVisionModelLoaded(): Boolean = visionLMManager.isModelLoaded
-
-        @JavascriptInterface
-        fun getLoadedModelName(): String = visionLMManager.loadedModelName ?: "none"
-
-        @JavascriptInterface
-        fun ammVisionInfer(base64Image: String, prompt: String): String {
-            return try {
-                val imageBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                val result = runBlocking(Dispatchers.IO) {
-                    visionLMManager.infer(imageBytes, prompt)
+    /**
+     * Injects window.AMMBridge into the page using a javascript: URL.
+     * This preserves the exact same API that bp-app expects.
+     */
+    private fun injectAmmBridge() {
+        val bridgeScript = """
+        (function() {
+            if (window.AMMBridge) return;
+            window.AMMBridge = {
+                isEmbedded: function() { return true; },
+                getAmmVersion: function() { return '1.1.4'; },
+                isHttpServiceRunning: function() {
+                    return JSON.parse(window.prompt('amm-bridge', '{"method":"isHttpServiceRunning"}'));
+                },
+                isVisionModelLoaded: function() {
+                    return JSON.parse(window.prompt('amm-bridge', '{"method":"isVisionModelLoaded"}'));
+                },
+                getLoadedModelName: function() {
+                    return window.prompt('amm-bridge', '{"method":"getLoadedModelName"}');
+                },
+                ammVisionInfer: function(base64Image, prompt) {
+                    return window.prompt('amm-bridge', JSON.stringify({
+                        method: 'ammVisionInfer',
+                        base64Image: base64Image,
+                        prompt: prompt
+                    }));
                 }
-                JSONObject().apply {
-                    put("success", result.success)
-                    put("response", result.response)
-                    put("tokens_per_sec", result.generationSpeed)
-                    put("context_used", result.contextLengthUsed)
-                    if (result.error != null) put("error", result.error)
-                }.toString()
-            } catch (e: Exception) {
-                JSONObject().apply {
-                    put("success", false)
-                    put("error", e.message ?: "Bridge inference failed")
-                }.toString()
+            };
+        })();
+        """.trimIndent().replace("\n", " ")
+        geckoSession.loadUri("javascript:$bridgeScript")
+    }
+
+    private fun handleBridgeRequest(msg: String): String {
+        return try {
+            val request = JSONObject(msg)
+            when (request.optString("method")) {
+                "isHttpServiceRunning" -> HttpService.isRunning.toString()
+                "isVisionModelLoaded" -> visionLMManager.isModelLoaded.toString()
+                "getLoadedModelName" -> (visionLMManager.loadedModelName ?: "none")
+                "ammVisionInfer" -> {
+                    val base64Image = request.optString("base64Image", "")
+                    val prompt = request.optString("prompt", "")
+                    val imageBytes = Base64.decode(base64Image, Base64.DEFAULT)
+                    val result = runBlocking(Dispatchers.IO) {
+                        visionLMManager.infer(imageBytes, prompt)
+                    }
+                    JSONObject().apply {
+                        put("success", result.success)
+                        put("response", result.response)
+                        put("tokens_per_sec", result.generationSpeed)
+                        put("context_used", result.contextLengthUsed)
+                        if (result.error != null) put("error", result.error)
+                    }.toString()
+                }
+                else -> "{\"error\":\"unknown method\"}"
             }
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("success", false)
+                put("error", e.message ?: "Bridge error")
+            }.toString()
         }
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (::webView.isInitialized && webView.canGoBack()) {
-            webView.goBack()
+        if (::geckoSession.isInitialized) {
+            // Use navigation delegate state if available, or just try goBack
+            geckoSession.goBack()
         } else {
             @Suppress("DEPRECATION")
             super.onBackPressed()
         }
+    }
+
+    override fun onDestroy() {
+        if (::geckoSession.isInitialized) {
+            geckoSession.close()
+        }
+        super.onDestroy()
     }
 
     // --- PWA / Shortcut helpers ---
@@ -520,7 +610,7 @@ class BrowserActivity : ComponentActivity() {
                                         if (!url.startsWith("http://") && !url.startsWith("https://")) {
                                             url = "https://$url"
                                         }
-                                        webView.loadUrl(url)
+                                        geckoSession.loadUri(url)
                                     })
                                 )
                             },
@@ -608,8 +698,9 @@ class BrowserActivity : ComponentActivity() {
                                         text = { Text("Clear cache") },
                                         onClick = {
                                             showMenu = false
-                                            webView.clearCache(true)
-                                            CookieManager.getInstance().removeAllCookies(null)
+                                            geckoRuntime.storageController.clearData(
+                                                StorageController.ClearFlags.ALL
+                                            )
                                             scope.launch { snackbarHostState.showSnackbar("Cache cleared") }
                                         }
                                     )
@@ -648,18 +739,18 @@ class BrowserActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
-                                onClick = { if (canGoBack) webView.goBack() },
+                                onClick = { if (canGoBack) geckoSession.goBack() },
                                 enabled = canGoBack
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                             }
                             IconButton(
-                                onClick = { if (canGoForward) webView.goForward() },
+                                onClick = { if (canGoForward) geckoSession.goForward() },
                                 enabled = canGoForward
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
                             }
-                            IconButton(onClick = { webView.reload() }) {
+                            IconButton(onClick = { geckoSession.reload() }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                             }
                             IconButton(onClick = {
@@ -668,7 +759,7 @@ class BrowserActivity : ComponentActivity() {
                                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
                                     url = "https://$url"
                                 }
-                                webView.loadUrl(url)
+                                geckoSession.loadUri(url)
                             }) {
                                 Icon(Icons.Default.Search, contentDescription = "Go")
                             }
@@ -689,20 +780,29 @@ class BrowserActivity : ComponentActivity() {
                                     value = findQuery,
                                     onValueChange = {
                                         findQuery = it
-                                        webView.findAllAsync(it)
+                                        if (it.isNotBlank()) {
+                                            geckoSession.finder.find(it, GeckoSession.FINDER_FIND_FORWARD)
+                                                .accept { result ->
+                                                    // result contains match count
+                                                }
+                                        }
                                     },
                                     modifier = Modifier.weight(1f),
                                     singleLine = true,
                                     placeholder = { Text("Find in page...") }
                                 )
-                                IconButton(onClick = { webView.findNext(true) }) {
+                                IconButton(onClick = {
+                                    geckoSession.finder.find(findQuery, GeckoSession.FINDER_FIND_FORWARD)
+                                }) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next")
                                 }
-                                IconButton(onClick = { webView.findNext(false) }) {
+                                IconButton(onClick = {
+                                    geckoSession.finder.find(findQuery, GeckoSession.FINDER_FIND_BACKWARDS)
+                                }) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous")
                                 }
                                 IconButton(onClick = {
-                                    webView.clearMatches()
+                                    geckoSession.finder.clear()
                                     showFindBar = false
                                     findQuery = ""
                                 }) {
@@ -715,7 +815,7 @@ class BrowserActivity : ComponentActivity() {
                     Box(modifier = Modifier.fillMaxSize()) {
                         AndroidView(
                             factory = {
-                                createConfiguredWebView(
+                                createConfiguredGeckoView(
                                     onPageStarted = { isLoading = true; progress = 0 },
                                     onPageFinished = { url ->
                                         isLoading = false
@@ -731,8 +831,9 @@ class BrowserActivity : ComponentActivity() {
                                     onUrlChanged = { url -> currentUrl = url; urlInput = url },
                                     onManifestDetected = { manifestUrl = it },
                                     onFullscreen = { isFullscreen = it }
-                                ).also { wv ->
-                                    wv.loadUrl(initialUrl)
+                                ).also { gv ->
+                                    gv.setSession(geckoSession)
+                                    geckoSession.loadUri(initialUrl)
                                 }
                             },
                             modifier = Modifier.fillMaxSize()

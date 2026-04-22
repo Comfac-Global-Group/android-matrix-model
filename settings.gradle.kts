@@ -26,6 +26,7 @@ dependencyResolutionManagement {
         mavenCentral()
         maven { url = URI("https://jitpack.io") }
         maven { url = URI("https://oss.sonatype.org/content/repositories/snapshots/") }
+        maven { url = URI("https://maven.mozilla.org/maven2") }
     }
 }
 

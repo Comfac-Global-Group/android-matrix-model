@@ -140,6 +140,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
+    // GeckoView (Firefox engine) — replaces system WebView
+    val geckoviewVersion = "132.0.20241110192737"
+    implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

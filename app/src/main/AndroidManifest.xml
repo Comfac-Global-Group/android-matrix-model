@@ -60,11 +60,6 @@
             android:label="🎯 Vision Hub"
             android:theme="@style/Theme.AMM" />
         <activity
-            android:name=".ui.screens.bpapp.BpAppWebViewActivity"
-            android:exported="false"
-            android:label="🩺 BP Log"
-            android:theme="@style/Theme.AMM" />
-        <activity
             android:name=".ui.screens.browser.BrowserActivity"
             android:exported="false"
             android:label="🌐 Browser"
