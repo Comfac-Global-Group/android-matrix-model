@@ -20,6 +20,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.util.Base64
 import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -92,9 +93,11 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import io.shubham0204.smollmandroid.data.AppDB
 import io.shubham0204.smollmandroid.llm.HttpService
+import io.shubham0204.smollmandroid.llm.VisionLMManager
 import io.shubham0204.smollmandroid.ui.theme.SmolLMAndroidTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -114,6 +117,7 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private val appDB: AppDB by inject()
+    private val visionLMManager: VisionLMManager by inject()
     private val okHttpClient = OkHttpClient()
 
     private lateinit var webView: WebView
@@ -305,7 +309,7 @@ class BrowserActivity : ComponentActivity() {
             clearHistory()
             CookieManager.getInstance().removeAllCookies(null)
 
-            addJavascriptInterface(AmmBridge(), "ammAndroid")
+            addJavascriptInterface(AmmBridge(), "AMMBridge")
         }
         return webView
     }
@@ -315,7 +319,38 @@ class BrowserActivity : ComponentActivity() {
         fun isEmbedded(): Boolean = true
 
         @JavascriptInterface
-        fun getAmmVersion(): String = "1.0.2"
+        fun getAmmVersion(): String = "1.1.4"
+
+        @JavascriptInterface
+        fun isHttpServiceRunning(): Boolean = HttpService.isRunning
+
+        @JavascriptInterface
+        fun isVisionModelLoaded(): Boolean = visionLMManager.isModelLoaded
+
+        @JavascriptInterface
+        fun getLoadedModelName(): String = visionLMManager.loadedModelName ?: "none"
+
+        @JavascriptInterface
+        fun ammVisionInfer(base64Image: String, prompt: String): String {
+            return try {
+                val imageBytes = Base64.decode(base64Image, Base64.DEFAULT)
+                val result = runBlocking(Dispatchers.IO) {
+                    visionLMManager.infer(imageBytes, prompt)
+                }
+                JSONObject().apply {
+                    put("success", result.success)
+                    put("response", result.response)
+                    put("tokens_per_sec", result.generationSpeed)
+                    put("context_used", result.contextLengthUsed)
+                    if (result.error != null) put("error", result.error)
+                }.toString()
+            } catch (e: Exception) {
+                JSONObject().apply {
+                    put("success", false)
+                    put("error", e.message ?: "Bridge inference failed")
+                }.toString()
+            }
+        }
     }
 
     @Deprecated("Deprecated in Java")
