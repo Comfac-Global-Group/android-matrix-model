@@ -313,8 +313,9 @@ class BrowserActivity : ComponentActivity() {
                     prompt: GeckoSession.PromptDelegate.TextPrompt
                 ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? {
                     // Intercept bridge prompts (window.prompt uses text prompt)
-                    if (prompt.title == "amm-bridge") {
-                        val response = handleBridgeRequest(prompt.message ?: "{}")
+                    // window.prompt(message, defaultValue) -> prompt.message = message, prompt.defaultValue = defaultValue
+                    if (prompt.message == "amm-bridge") {
+                        val response = handleBridgeRequest(prompt.defaultValue ?: "{}")
                         return GeckoResult.fromValue(prompt.confirm(response))
                     }
                     return super.onTextPrompt(session, prompt)
