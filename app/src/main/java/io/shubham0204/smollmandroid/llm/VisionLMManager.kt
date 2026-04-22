@@ -44,6 +44,10 @@ class VisionLMManager {
     var isModelLoaded = false
         private set
 
+    @Volatile
+    var loadedModelName: String? = null
+        private set
+
     data class VisionResponse(
         val response: String,
         val generationSpeed: Float,
@@ -68,12 +72,16 @@ class VisionLMManager {
             }
             modelInitJob?.join()
             isModelLoaded = true
+            loadedModelName = modelPath.substringAfterLast("/")
+                .removeSuffix(".gguf")
+                .takeIf { it.isNotBlank() }
             Log.i(LOGTAG, "Vision model loaded: $modelPath + $mmprojPath")
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             isModelLoaded = false
+            loadedModelName = null
             Log.e(LOGTAG, "Failed to load vision model: ${e.message}")
             Result.failure(e)
         }
@@ -140,5 +148,6 @@ class VisionLMManager {
         inferenceJob?.cancel()
         instance.close()
         isModelLoaded = false
+        loadedModelName = null
     }
 }

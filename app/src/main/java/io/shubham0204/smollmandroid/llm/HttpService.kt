@@ -44,12 +44,14 @@ private const val HTTP_PORT = 8765
 /**
  * Foreground service that hosts an embedded HTTP server (NanoHTTPD) on 127.0.0.1:8765.
  *
- * Endpoints:
- *   GET  /health          → {"status":"ok"}
- *   GET  /status          → {"vision_model_loaded":true/false, "model_name":"..."}
- *   POST /vision          → multipart with `image` (file) and `prompt` (text)
- *                           Returns JSON: { "response": "...", "tokens_per_sec": 1.2,
- *                                           "context_used": 123, "success": true }
+ * Endpoints (bp-app contract):
+ *   GET  /v1/status       → {"version":"1.1.0","ready":true,"capabilities":["vision"],
+ *                            "models":{"vision":"qwen2.5-vl-3b"},"queue_depth":0,
+ *                            "inference_mode":"local"}
+ *   POST /v1/vision/completions → multipart with `image` (file) and `prompt` (text)
+ *   GET  /health          → {"status":"ok"} (legacy)
+ *   GET  /status          → {"vision_model_loaded":true/false, "model_name":"..."} (legacy)
+ *   POST /vision          → same as /v1/vision/completions (legacy)
  *
  * The service must remain in the foreground while models are loaded to prevent
  * Android from killing the process under memory pressure.
@@ -92,8 +94,8 @@ class HttpService : Service() {
     }
 
     private fun modelNameProvider(): String {
-        // TODO: return the actual loaded vision model name
-        return if (visionLMManager.isModelLoaded) "loaded" else "none"
+        return visionLMManager.loadedModelName
+            ?: if (visionLMManager.isModelLoaded) "unknown" else "none"
     }
 
     private fun createNotificationChannel() {
@@ -143,6 +145,7 @@ class HttpService : Service() {
                 response.addHeader("Access-Control-Allow-Origin", "*")
                 response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 response.addHeader("Access-Control-Allow-Headers", "Content-Type")
+                response.addHeader("Access-Control-Allow-Private-Network", "true")
                 return response
             }
 
@@ -150,6 +153,23 @@ class HttpService : Service() {
             val method = session.method
 
             return when {
+                uri == "/v1/status" && method == Method.GET -> {
+                    jsonResponse(Response.Status.OK, buildJsonObject {
+                        put("version", "1.1.0")
+                        put("ready", visionLMManager.isModelLoaded)
+                        put("capabilities", buildJsonArray {
+                            add(JsonPrimitive("vision"))
+                        })
+                        put("models", buildJsonObject {
+                            put("vision", modelNameProvider())
+                        })
+                        put("queue_depth", 0)
+                        put("inference_mode", "local")
+                    })
+                }
+                (uri == "/v1/vision/completions" || uri == "/vision") && method == Method.POST -> {
+                    handleVisionRequest(session)
+                }
                 uri == "/health" && method == Method.GET -> {
                     jsonResponse(Response.Status.OK, buildJsonObject { put("status", "ok") })
                 }
@@ -159,13 +179,12 @@ class HttpService : Service() {
                         put("model_name", modelNameProvider())
                     })
                 }
-                uri == "/vision" && method == Method.POST -> {
-                    handleVisionRequest(session)
-                }
                 else -> {
                     jsonResponse(Response.Status.NOT_FOUND, buildJsonObject {
                         put("error", "Not found")
                         put("available_endpoints", buildJsonArray {
+                            add(JsonPrimitive("/v1/status"))
+                            add(JsonPrimitive("/v1/vision/completions"))
                             add(JsonPrimitive("/health"))
                             add(JsonPrimitive("/status"))
                             add(JsonPrimitive("/vision"))
@@ -228,6 +247,7 @@ class HttpService : Service() {
             response.addHeader("Access-Control-Allow-Origin", "*")
             response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             response.addHeader("Access-Control-Allow-Headers", "Content-Type")
+            response.addHeader("Access-Control-Allow-Private-Network", "true")
             return response
         }
 
