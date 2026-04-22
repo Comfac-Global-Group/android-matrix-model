@@ -85,11 +85,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import io.shubham0204.smollmandroid.data.AppDB
+import io.shubham0204.smollmandroid.llm.HttpService
 import io.shubham0204.smollmandroid.ui.theme.SmolLMAndroidTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -438,9 +440,18 @@ class BrowserActivity : ComponentActivity() {
         var manifestUrl by remember { mutableStateOf("") }
         var showAddToHome by remember { mutableStateOf(false) }
         var isFullscreen by remember { mutableStateOf(false) }
+        var httpServiceRunning by remember { mutableStateOf(HttpService.isRunning) }
 
         LaunchedEffect(currentUrl) {
             isBookmarked = appDB.isBookmarked(currentUrl)
+        }
+
+        // Poll HTTP service status periodically
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(2000)
+                httpServiceRunning = HttpService.isRunning
+            }
         }
 
         LaunchedEffect(manifestUrl) {
@@ -484,6 +495,40 @@ class BrowserActivity : ComponentActivity() {
                                 }
                             },
                             actions = {
+                                val context = LocalContext.current
+                                // HTTP Service status chip
+                                androidx.compose.material3.FilterChip(
+                                    onClick = {
+                                        if (httpServiceRunning) {
+                                            HttpService.stop(context)
+                                            httpServiceRunning = false
+                                            scope.launch { snackbarHostState.showSnackbar("HTTP service stopped") }
+                                        } else {
+                                            HttpService.start(context)
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(800)
+                                                httpServiceRunning = HttpService.isRunning
+                                                snackbarHostState.showSnackbar(
+                                                    if (httpServiceRunning) "HTTP service started" else "Failed to start HTTP service"
+                                                )
+                                            }
+                                        }
+                                    },
+                                    label = {
+                                        Text(
+                                            if (httpServiceRunning) "AI ON" else "AI OFF",
+                                            style = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
+                                        )
+                                    },
+                                    selected = httpServiceRunning,
+                                    leadingIcon = {
+                                        androidx.compose.material3.Icon(
+                                            imageVector = if (httpServiceRunning) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                )
                                 IconButton(onClick = {
                                     if (isBookmarked) {
                                         val bookmark = appDB.getBookmarkByUrl(currentUrl)

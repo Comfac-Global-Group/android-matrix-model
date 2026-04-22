@@ -74,9 +74,11 @@ class HttpService : Service() {
             server = VisionHttpServer(HTTP_PORT, visionLMManager, this::modelNameProvider)
             try {
                 server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+                isRunning = true
                 Log.i(LOGTAG, "HTTP server started on 127.0.0.1:$HTTP_PORT")
             } catch (e: Exception) {
                 Log.e(LOGTAG, "Failed to start HTTP server: ${e.message}")
+                isRunning = false
                 stopSelf()
             }
         }
@@ -89,6 +91,7 @@ class HttpService : Service() {
     override fun onDestroy() {
         server?.stop()
         server = null
+        isRunning = false
         Log.i(LOGTAG, "HTTP server stopped")
         super.onDestroy()
     }
@@ -254,6 +257,10 @@ class HttpService : Service() {
     }
 
     companion object {
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+
         fun start(context: Context) {
             val intent = Intent(context, HttpService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

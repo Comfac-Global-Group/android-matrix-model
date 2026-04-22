@@ -83,12 +83,17 @@ private fun VisionHubScreen(
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    var serviceRunning by remember { mutableStateOf(false) }
+    var serviceRunning by remember { mutableStateOf(HttpService.isRunning) }
     var modelLoaded by remember { mutableStateOf(visionLMManager.isModelLoaded) }
     var statusText by remember { mutableStateOf("Idle") }
     var modelPath by remember { mutableStateOf("") }
     var mmprojPath by remember { mutableStateOf("") }
     var dbVisionModels by remember { mutableStateOf(listOf<io.shubham0204.smollmandroid.data.LLMModel>()) }
+    var debugLines by remember { mutableStateOf(listOf<String>()) }
+
+    fun addDebug(line: String) {
+        debugLines = (listOf("[${java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date())}] $line") + debugLines).take(50)
+    }
 
     // Scan for vision model files on mount
     LaunchedEffect(Unit) {
@@ -103,6 +108,17 @@ private fun VisionHubScreen(
 
             // Also load vision models from database
             dbVisionModels = appDB.getModelsList().filter { it.isVisionModel }
+        }
+        addDebug("VisionHub opened. HTTP service: ${if (HttpService.isRunning) "RUNNING" else "STOPPED"}")
+
+        // Poll service state to keep UI in sync when changed from other activities
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            val currentState = HttpService.isRunning
+            if (serviceRunning != currentState) {
+                serviceRunning = currentState
+                addDebug("HTTP service state changed externally: ${if (currentState) "RUNNING" else "STOPPED"}")
+            }
         }
     }
 
@@ -203,27 +219,53 @@ private fun VisionHubScreen(
                 }
             }
 
-            // Controls
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("HTTP Service")
-                Switch(
-                    checked = serviceRunning,
-                    onCheckedChange = { enabled ->
-                        if (enabled) {
-                            HttpService.start(context)
-                            serviceRunning = true
-                            statusText = "Service started"
-                        } else {
-                            HttpService.stop(context)
-                            serviceRunning = false
-                            statusText = "Service stopped"
-                        }
+            // HTTP Service Toggle with verification
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("HTTP Service", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            if (serviceRunning) "Running on 127.0.0.1:8765" else "Stopped",
+                            color = if (serviceRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Switch(
+                            checked = serviceRunning,
+                            onCheckedChange = { enabled ->
+                                if (enabled) {
+                                    HttpService.start(context)
+                                    // Verify service actually started
+                                    scope.launch(Dispatchers.IO) {
+                                        kotlinx.coroutines.delay(500)
+                                        val isUp = HttpService.isRunning
+                                        withContext(Dispatchers.Main) {
+                                            serviceRunning = isUp
+                                            statusText = if (isUp) "Service started" else "Service failed to start"
+                                            addDebug("HTTP start attempt: ${if (isUp) "SUCCESS" else "FAILED"}")
+                                        }
+                                    }
+                                } else {
+                                    HttpService.stop(context)
+                                    serviceRunning = false
+                                    statusText = "Service stopped"
+                                    addDebug("HTTP service stopped")
+                                }
+                            }
+                        )
                     }
-                )
+                    if (serviceRunning && modelLoaded) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Ready for local apps at http://127.0.0.1:8765/v1/status",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
 
             Button(
@@ -259,35 +301,28 @@ private fun VisionHubScreen(
                 Text("Unload Model")
             }
 
-            // Instructions
+            // Debug Log
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
                 )
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "bp-app Integration",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    Text("Debug / Status", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "1. Download a vision-capable GGUF model + its mmproj file",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        "2. Place both files in the app storage (use Import Model)",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        "3. Load the model and start the HTTP service",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        "4. Open bp-app and capture a BP monitor photo",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    if (debugLines.isEmpty()) {
+                        Text("No events yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    } else {
+                        debugLines.forEach { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
