@@ -116,4 +116,22 @@
     <string name="title_activity_app_settings">AppSettingsActivity</string>
     <string name="chat_options_show_ram">Show RAM usage</string>
     <string name="chat_options_hide_ram">Hide RAM usage</string>
+    <string name="browser_enter_url">Enter URL</string>
+    <string name="browser_back">Back</string>
+    <string name="browser_forward">Forward</string>
+    <string name="browser_refresh">Refresh</string>
+    <string name="browser_go">Go</string>
+    <string name="browser_bookmark">Bookmark</string>
+    <string name="browser_find_in_page">Find in page</string>
+    <string name="browser_history">History</string>
+    <string name="browser_clear_cache">Clear cache</string>
+    <string name="browser_add_to_home_screen">Add to home screen</string>
+    <string name="browser_bookmark_added">Bookmark added</string>
+    <string name="browser_cache_cleared">Cache cleared</string>
+    <string name="vision_model_import_text">Select Text Model .gguf</string>
+    <string name="vision_model_import_mmproj">Select MMProj .gguf (optional)</string>
+    <string name="vision_model_import_button">Import Vision Model</string>
+    <string name="vision_model_mmproj_ready">MMProj: ready</string>
+    <string name="vision_model_mmproj_missing">MMProj: missing</string>
+    <string name="download_model_mmproj_title">MMProj Files (Vision Models)</string>
 </resources>

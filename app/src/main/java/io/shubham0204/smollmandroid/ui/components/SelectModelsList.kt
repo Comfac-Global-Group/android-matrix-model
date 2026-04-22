@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Calendar
+import compose.icons.feathericons.Eye
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Trash
 import compose.icons.feathericons.Type
@@ -249,12 +250,32 @@ private fun ModelListItem(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Spacer(modifier = Modifier.height(8.dp))
-            Text(text = model.name, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = model.name, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                if (model.isVisionModel) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        FeatherIcons.Eye,
+                        contentDescription = "Vision Model",
+                        modifier = Modifier.size(12.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
             Text(
                 text = "%.1f GB".format(File(model.path).length() / (1e+9)),
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
             )
+            if (model.isVisionModel) {
+                val mmprojExists = model.mmprojPath.isNotEmpty() && File(model.mmprojPath).exists()
+                Text(
+                    text = if (mmprojExists) stringResource(R.string.vision_model_mmproj_ready) else stringResource(R.string.vision_model_mmproj_missing),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (mmprojExists) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
         }
         if (showModelDeleteIcon) {

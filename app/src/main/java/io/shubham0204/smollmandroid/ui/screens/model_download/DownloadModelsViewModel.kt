@@ -86,6 +86,14 @@ class DownloadModelsViewModel(
         downloadManager.enqueue(request)
     }
 
+    /**
+     * Download both the text model and its mmproj file.
+     */
+    fun downloadVisionModel(textModelUrl: String, mmprojUrl: String) {
+        downloadModelFromUrl(textModelUrl)
+        downloadModelFromUrl(mmprojUrl)
+    }
+
     fun getModels(query: String): Flow<PagingData<HFModelSearch.ModelSearchResult>> =
         hfModelsAPI.getModelsList(query)
 
@@ -156,15 +164,96 @@ class DownloadModelsViewModel(
         }
     }
 
+    /**
+     * Copy a vision model pair (text GGUF + mmproj GGUF) into the app's internal directory.
+     */
+    fun copyVisionModelFile(
+        textModelUri: Uri,
+        mmprojUri: Uri?,
+        onComplete: () -> Unit,
+    ) {
+        var textFileName = ""
+        context.contentResolver.query(textModelUri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            cursor.moveToFirst()
+            textFileName = cursor.getString(nameIndex)
+        }
+        var mmprojFileName = ""
+        mmprojUri?.let { uri ->
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                cursor.moveToFirst()
+                mmprojFileName = cursor.getString(nameIndex)
+            }
+        }
+
+        if (textFileName.isEmpty()) {
+            Toast.makeText(context, context.getString(R.string.toast_invalid_file), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        setProgressDialogTitle(context.getString(R.string.dialog_progress_copy_model_title))
+        setProgressDialogText(
+            context.getString(R.string.dialog_progress_copy_model_text, textFileName)
+        )
+        showProgressDialog()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            // Copy text model
+            context.contentResolver.openInputStream(textModelUri).use { inputStream ->
+                FileOutputStream(File(context.filesDir, textFileName)).use { outputStream ->
+                    inputStream?.copyTo(outputStream)
+                }
+            }
+            // Copy mmproj if present
+            mmprojUri?.let { uri ->
+                context.contentResolver.openInputStream(uri).use { inputStream ->
+                    FileOutputStream(File(context.filesDir, mmprojFileName)).use { outputStream ->
+                        inputStream?.copyTo(outputStream)
+                    }
+                }
+            }
+
+            val ggufReader = GGUFReader()
+            ggufReader.load(File(context.filesDir, textFileName).absolutePath)
+            val contextSize =
+                ggufReader.getContextSize() ?: SmolLM.DefaultInferenceParams.contextSize
+            val chatTemplate =
+                ggufReader.getChatTemplate() ?: SmolLM.DefaultInferenceParams.chatTemplate
+
+            appDB.addModel(
+                name = textFileName,
+                url = "",
+                path = Paths.get(context.filesDir.absolutePath, textFileName).toString(),
+                contextSize = contextSize.toInt(),
+                chatTemplate = chatTemplate,
+                mmprojUrl = "",
+                mmprojPath = if (mmprojFileName.isNotEmpty()) {
+                    Paths.get(context.filesDir.absolutePath, mmprojFileName).toString()
+                } else "",
+                isVisionModel = mmprojFileName.isNotEmpty(),
+            )
+            withContext(Dispatchers.Main) {
+                hideProgressDialog()
+                onComplete()
+            }
+        }
+    }
+
     fun fetchModelInfoAndTree(
         modelId: String,
-        onResult: (HFModelInfo.ModelInfo, List<HFModelTree.HFModelFile>) -> Unit,
+        onResult: (HFModelInfo.ModelInfo, List<HFModelTree.HFModelFile>, List<HFModelTree.HFModelFile>) -> Unit,
     ) {
         CoroutineScope(Dispatchers.IO).launch {
             val modelInfo = hfModelsAPI.getModelInfo(modelId)
-            var modelTree = hfModelsAPI.getModelTree(modelId)
-            modelTree = modelTree.filter { modelFile -> modelFile.path.endsWith("gguf") }
-            withContext(Dispatchers.Main) { onResult(modelInfo, modelTree) }
+            val modelTree = hfModelsAPI.getModelTree(modelId)
+            val textModels = modelTree.filter {
+                it.path.endsWith(".gguf") && !it.path.contains("mmproj", ignoreCase = true)
+            }
+            val mmprojFiles = modelTree.filter {
+                it.path.endsWith(".gguf") && it.path.contains("mmproj", ignoreCase = true)
+            }
+            withContext(Dispatchers.Main) { onResult(modelInfo, textModels, mmprojFiles) }
         }
     }
 }

@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +49,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -98,7 +103,9 @@ private fun ViewHFModelScreenPreview() {
             ),
         modelFileTree =
             listOf(HFModelTree.HFModelFile(type = "", oid = "", size = 1200, path = "file.gguf")),
-        onDownloadModel = {},
+        mmprojFileTree =
+            listOf(HFModelTree.HFModelFile(type = "", oid = "", size = 400, path = "mmproj-file.gguf")),
+        onDownloadModel = { _, _ -> },
         onBackClicked = {},
     )
 }
@@ -109,10 +116,14 @@ fun ViewHFModelScreen(
     modelId: String,
     modelInfo: HFModelInfo.ModelInfo,
     modelFileTree: List<HFModelTree.HFModelFile>,
-    onDownloadModel: (String) -> Unit,
+    mmprojFileTree: List<HFModelTree.HFModelFile>,
+    onDownloadModel: (String, String?) -> Unit,
     onBackClicked: () -> Unit,
 ) {
     val context = LocalContext.current
+    var selectedMmproj by remember { mutableStateOf<HFModelTree.HFModelFile?>(null) }
+    var downloadMmproj by remember { mutableStateOf(false) }
+
     SmolLMAndroidTheme {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
@@ -177,6 +188,10 @@ fun ViewHFModelScreen(
                 GGUFModelsList(
                     modelFileTree,
                     onModelClick = { modelFile ->
+                        if (mmprojFileTree.isNotEmpty()) {
+                            selectedMmproj = mmprojFileTree.first()
+                            downloadMmproj = true
+                        }
                         createAlertDialog(
                             dialogTitle = "Download Model",
                             dialogText =
@@ -184,8 +199,12 @@ fun ViewHFModelScreen(
                                         "folder. Select the model file from the file explorer to load it in the app.",
                             dialogPositiveButtonText = "Download",
                             onPositiveButtonClick = {
+                                val mmprojUrl = if (downloadMmproj && selectedMmproj != null) {
+                                    "https://huggingface.co/${modelInfo.modelId}/resolve/main/${selectedMmproj!!.path}"
+                                } else null
                                 onDownloadModel(
-                                    "https://huggingface.co/${modelInfo.modelId}/resolve/main/${modelFile.path}"
+                                    "https://huggingface.co/${modelInfo.modelId}/resolve/main/${modelFile.path}",
+                                    mmprojUrl,
                                 )
                                 onBackClicked()
                             },
@@ -194,6 +213,20 @@ fun ViewHFModelScreen(
                         )
                     },
                 )
+
+                if (mmprojFileTree.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.download_model_mmproj_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    MMProjFilesList(
+                        mmprojFileTree,
+                        selectedMmproj = selectedMmproj,
+                        onMmprojSelected = { selectedMmproj = it },
+                    )
+                }
             }
             AppAlertDialog()
         }
@@ -211,6 +244,64 @@ private fun GGUFModelsList(
     ) {
         items(modelFiles) { modelFile ->
             GGUFModelListItem(modelFile, onModelClick)
+        }
+    }
+}
+
+@Composable
+private fun MMProjFilesList(
+    mmprojFiles: List<HFModelTree.HFModelFile>,
+    selectedMmproj: HFModelTree.HFModelFile?,
+    onMmprojSelected: (HFModelTree.HFModelFile) -> Unit,
+) {
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(mmprojFiles) { mmprojFile ->
+            val isSelected = selectedMmproj == mmprojFile
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onMmprojSelected(mmprojFile) },
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    }
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { if (it) onMmprojSelected(mmprojFile) }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = mmprojFile.path,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        val fileSizeGB = mmprojFile.size / 1e+9
+                        Text(
+                            text =
+                                if (fileSizeGB < 1) {
+                                    "${(fileSizeGB * 1000).toInt()} MB"
+                                } else {
+                                    "%.2f GB".format(fileSizeGB)
+                                },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
     }
 }

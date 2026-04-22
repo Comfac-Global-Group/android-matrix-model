@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room.migration.Migration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
@@ -12,8 +14,8 @@ import org.koin.core.annotation.Single
 import java.util.Date
 
 @Database(
-    entities = [Chat::class, ChatMessage::class, LLMModel::class, Task::class, Folder::class],
-    version = 1,
+    entities = [Chat::class, ChatMessage::class, LLMModel::class, Task::class, Folder::class, Bookmark::class, History::class],
+    version = 3,
 )
 @TypeConverters(Converters::class)
 abstract class AppRoomDatabase : RoomDatabase() {
@@ -26,12 +28,47 @@ abstract class AppRoomDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
 
     abstract fun folderDao(): FolderDao
+
+    abstract fun bookmarkDao(): BookmarkDao
+
+    abstract fun historyDao(): HistoryDao
+}
+
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "CREATE TABLE IF NOT EXISTS Bookmark (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "title TEXT NOT NULL DEFAULT '', " +
+                "url TEXT NOT NULL DEFAULT '', " +
+                "faviconUrl TEXT NOT NULL DEFAULT '', " +
+                "dateAdded INTEGER NOT NULL DEFAULT 0)"
+        )
+        database.execSQL(
+            "CREATE TABLE IF NOT EXISTS History (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "title TEXT NOT NULL DEFAULT '', " +
+                "url TEXT NOT NULL DEFAULT '', " +
+                "visitCount INTEGER NOT NULL DEFAULT 1, " +
+                "lastVisited INTEGER NOT NULL DEFAULT 0)"
+        )
+    }
+}
+
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE LLMModel ADD COLUMN mmprojUrl TEXT NOT NULL DEFAULT ''")
+        database.execSQL("ALTER TABLE LLMModel ADD COLUMN mmprojPath TEXT NOT NULL DEFAULT ''")
+        database.execSQL("ALTER TABLE LLMModel ADD COLUMN isVisionModel INTEGER NOT NULL DEFAULT 0")
+    }
 }
 
 @Single
 class AppDB(context: Context) {
     private val db =
-        Room.databaseBuilder(context, AppRoomDatabase::class.java, "app-database").build()
+        Room.databaseBuilder(context, AppRoomDatabase::class.java, "app-database")
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .build()
 
     /** Get all chats from the database sorted by dateUsed in descending order. */
     fun getChats(): Flow<List<Chat>> = db.chatsDao().getChats()
@@ -126,7 +163,16 @@ class AppDB(context: Context) {
 
     // Models
 
-    fun addModel(name: String, url: String, path: String, contextSize: Int, chatTemplate: String) =
+    fun addModel(
+        name: String,
+        url: String,
+        path: String,
+        contextSize: Int,
+        chatTemplate: String,
+        mmprojUrl: String = "",
+        mmprojPath: String = "",
+        isVisionModel: Boolean = false,
+    ) =
         runBlocking(Dispatchers.IO) {
             db.llmModelDao()
                 .insertModels(
@@ -136,6 +182,9 @@ class AppDB(context: Context) {
                         path = path,
                         contextSize = contextSize,
                         chatTemplate = chatTemplate,
+                        mmprojUrl = mmprojUrl,
+                        mmprojPath = mmprojPath,
+                        isVisionModel = isVisionModel,
                     )
                 )
         }
@@ -189,4 +238,42 @@ class AppDB(context: Context) {
             db.folderDao().deleteFolder(folderId)
             db.chatsDao().deleteChatsInFolder(folderId)
         }
+
+    // Bookmarks
+
+    fun getBookmarks(): Flow<List<Bookmark>> = db.bookmarkDao().getBookmarks()
+
+    fun addBookmark(title: String, url: String, faviconUrl: String = "") =
+        runBlocking(Dispatchers.IO) {
+            db.bookmarkDao().insertBookmark(Bookmark(title = title, url = url, faviconUrl = faviconUrl))
+        }
+
+    fun deleteBookmark(bookmarkId: Long) = runBlocking(Dispatchers.IO) { db.bookmarkDao().deleteBookmark(bookmarkId) }
+
+    fun isBookmarked(url: String): Boolean =
+        runBlocking(Dispatchers.IO) { db.bookmarkDao().isBookmarked(url) > 0 }
+
+    fun getBookmarkByUrl(url: String): Bookmark? =
+        runBlocking(Dispatchers.IO) { db.bookmarkDao().getBookmarkByUrl(url) }
+
+    // History
+
+    fun getHistory(): Flow<List<History>> = db.historyDao().getHistory()
+
+    fun addOrUpdateHistory(title: String, url: String) =
+        runBlocking(Dispatchers.IO) {
+            val existing = db.historyDao().getHistoryByUrl(url)
+            if (existing != null) {
+                db.historyDao().updateHistory(existing.copy(title = title, visitCount = existing.visitCount + 1, lastVisited = Date()))
+            } else {
+                db.historyDao().insertHistory(History(title = title, url = url))
+            }
+        }
+
+    fun deleteHistory(historyId: Long) = runBlocking(Dispatchers.IO) { db.historyDao().deleteHistory(historyId) }
+
+    fun clearHistory() = runBlocking(Dispatchers.IO) { db.historyDao().clearHistory() }
+
+    fun getRecentHistory(): List<History> =
+        runBlocking(Dispatchers.IO) { db.historyDao().getRecentHistory() }
 }

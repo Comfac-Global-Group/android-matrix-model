@@ -35,6 +35,9 @@ data class LLMModel(
     var path: String = "",
     var contextSize: Int = 0,
     var chatTemplate: String = "",
+    var mmprojUrl: String = "",
+    var mmprojPath: String = "",
+    var isVisionModel: Boolean = false,
 )
 
 @Dao

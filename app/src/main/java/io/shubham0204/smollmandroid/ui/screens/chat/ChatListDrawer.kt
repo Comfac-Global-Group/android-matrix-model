@@ -81,7 +81,7 @@ import io.shubham0204.smollmandroid.ui.components.noRippleClickable
 import io.shubham0204.smollmandroid.ui.preview.dummyChats
 import io.shubham0204.smollmandroid.ui.preview.dummyFolders
 import io.shubham0204.smollmandroid.ui.screens.chat.dialogs.createFolderOptionsDialog
-import io.shubham0204.smollmandroid.ui.screens.bpapp.BpAppWebViewActivity
+import io.shubham0204.smollmandroid.ui.screens.browser.BrowserActivity
 import io.shubham0204.smollmandroid.ui.screens.manage_asr.ManageASRActivity
 import io.shubham0204.smollmandroid.ui.screens.manage_tasks.ManageTasksActivity
 import io.shubham0204.smollmandroid.ui.screens.vision_hub.VisionHubActivity
@@ -183,7 +183,7 @@ fun DrawerUI(
                     onCloseDrawer()
                 },
                 onBpAppClick = {
-                    Intent(context, BpAppWebViewActivity::class.java).also {
+                    Intent(context, BrowserActivity::class.java).also {
                         context.startActivity(it)
                     }
                     onCloseDrawer()

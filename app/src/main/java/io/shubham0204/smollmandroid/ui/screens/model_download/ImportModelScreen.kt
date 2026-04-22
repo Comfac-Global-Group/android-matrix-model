@@ -20,6 +20,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -39,7 +43,12 @@ import io.shubham0204.smollmandroid.ui.components.createAlertDialog
 @Preview
 @Composable
 private fun PreviewImportModelScreen() {
-    ImportModelScreen(onPrevSectionClick = {}, checkGGUFFile = { false }, copyModelFile = {})
+    ImportModelScreen(
+        onPrevSectionClick = {},
+        checkGGUFFile = { false },
+        copyModelFile = {},
+        copyVisionModelFile = { _, _ -> },
+    )
 }
 
 @Composable
@@ -47,9 +56,13 @@ fun ImportModelScreen(
     onPrevSectionClick: () -> Unit,
     checkGGUFFile: (Uri) -> Boolean,
     copyModelFile: (Uri) -> Unit,
+    copyVisionModelFile: (Uri, Uri?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    var textModelUri by remember { mutableStateOf<Uri?>(null) }
+    var mmprojUri by remember { mutableStateOf<Uri?>(null) }
+
     val launcher =
         rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { activityResult ->
             activityResult.data?.let {
@@ -66,6 +79,35 @@ fun ImportModelScreen(
                             onNegativeButtonClick = null,
                         )
                     }
+                }
+            }
+        }
+
+    val visionTextLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { activityResult ->
+            activityResult.data?.let {
+                it.data?.let { uri ->
+                    if (checkGGUFFile(uri)) {
+                        textModelUri = uri
+                    } else {
+                        createAlertDialog(
+                            dialogTitle = context.getString(R.string.dialog_invalid_file_title),
+                            dialogText = context.getString(R.string.dialog_invalid_file_text),
+                            dialogPositiveButtonText = "OK",
+                            onPositiveButtonClick = {},
+                            dialogNegativeButtonText = null,
+                            onNegativeButtonClick = null,
+                        )
+                    }
+                }
+            }
+        }
+
+    val visionMmprojLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { activityResult ->
+            activityResult.data?.let {
+                it.data?.let { uri ->
+                    mmprojUri = uri
                 }
             }
         }
@@ -126,6 +168,72 @@ fun ImportModelScreen(
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     Text(stringResource(R.string.download_models_select_gguf_button))
+                }
+
+                Text(
+                    text = "— OR import vision model —",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+
+                Button(
+                    onClick = {
+                        val intent =
+                            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                setType("application/octet-stream")
+                                putExtra(
+                                    DocumentsContract.EXTRA_INITIAL_URI,
+                                    Environment.getExternalStoragePublicDirectory(
+                                        Environment.DIRECTORY_DOWNLOADS
+                                    )
+                                        .toUri(),
+                                )
+                            }
+                        visionTextLauncher.launch(intent)
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(stringResource(R.string.vision_model_import_text))
+                }
+
+                if (textModelUri != null) {
+                    Text(
+                        text = "Text: ${textModelUri?.lastPathSegment ?: "selected"}",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Button(
+                        onClick = {
+                            val intent =
+                                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                    setType("application/octet-stream")
+                                    putExtra(
+                                        DocumentsContract.EXTRA_INITIAL_URI,
+                                        Environment.getExternalStoragePublicDirectory(
+                                            Environment.DIRECTORY_DOWNLOADS
+                                        )
+                                            .toUri(),
+                                    )
+                                }
+                            visionMmprojLauncher.launch(intent)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.vision_model_import_mmproj))
+                    }
+                }
+
+                if (textModelUri != null) {
+                    Button(
+                        onClick = {
+                            copyVisionModelFile(textModelUri!!, mmprojUri)
+                            textModelUri = null
+                            mmprojUri = null
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.vision_model_import_button))
+                    }
                 }
             }
         }

@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import io.shubham0204.smollmandroid.data.AppDB
 import io.shubham0204.smollmandroid.llm.HttpService
 import io.shubham0204.smollmandroid.llm.VisionLMManager
 import io.shubham0204.smollmandroid.ui.theme.SmolLMAndroidTheme
@@ -49,10 +50,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
+import java.io.File
 
 class VisionHubActivity : ComponentActivity() {
 
     private val visionLMManager: VisionLMManager by inject()
+    private val appDB: AppDB by inject()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,6 +64,7 @@ class VisionHubActivity : ComponentActivity() {
             SmolLMAndroidTheme {
                 VisionHubScreen(
                     visionLMManager = visionLMManager,
+                    appDB = appDB,
                     onBack = { finish() },
                 )
             }
@@ -72,6 +76,7 @@ class VisionHubActivity : ComponentActivity() {
 @Composable
 private fun VisionHubScreen(
     visionLMManager: VisionLMManager,
+    appDB: AppDB,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -83,6 +88,7 @@ private fun VisionHubScreen(
     var statusText by remember { mutableStateOf("Idle") }
     var modelPath by remember { mutableStateOf("") }
     var mmprojPath by remember { mutableStateOf("") }
+    var dbVisionModels by remember { mutableStateOf(listOf<io.shubham0204.smollmandroid.data.LLMModel>()) }
 
     // Scan for vision model files on mount
     LaunchedEffect(Unit) {
@@ -94,6 +100,9 @@ private fun VisionHubScreen(
             val mmproj = ggufs.find { it.name.contains("mmproj", ignoreCase = true) }
             if (textModel != null) modelPath = textModel.absolutePath
             if (mmproj != null) mmprojPath = mmproj.absolutePath
+
+            // Also load vision models from database
+            dbVisionModels = appDB.getModelsList().filter { it.isVisionModel }
         }
     }
 
@@ -158,6 +167,39 @@ private fun VisionHubScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
+                }
+            }
+
+            // Registered Vision Models from DB
+            if (dbVisionModels.isNotEmpty()) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Registered Vision Models",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        dbVisionModels.forEach { model ->
+                            val textExists = File(model.path).exists()
+                            val mmprojExists = model.mmprojPath.isNotEmpty() && File(model.mmprojPath).exists()
+                            Text(
+                                text = model.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                            )
+                            Text(
+                                text = "Text: ${if (textExists) "ready" else "missing"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (textExists) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = "MMProj: ${if (mmprojExists) "ready" else "missing"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (mmprojExists) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
                 }
             }
 

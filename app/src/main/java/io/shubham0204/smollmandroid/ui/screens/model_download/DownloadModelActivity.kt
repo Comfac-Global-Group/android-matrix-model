@@ -70,6 +70,7 @@ class DownloadModelActivity : ComponentActivity() {
         val modelId: String,
         val modelInfo: HFModelInfo.ModelInfo,
         val modelFiles: List<HFModelTree.HFModelFile>,
+        val mmprojFiles: List<HFModelTree.HFModelFile>,
     )
 
     @Serializable
@@ -104,8 +105,13 @@ class DownloadModelActivity : ComponentActivity() {
                             route.modelId,
                             route.modelInfo,
                             route.modelFiles,
-                            onDownloadModel = { modelUrl ->
-                                viewModel.downloadModelFromUrl(modelUrl)
+                            route.mmprojFiles,
+                            onDownloadModel = { modelUrl, mmprojUrl ->
+                                if (mmprojUrl != null) {
+                                    viewModel.downloadVisionModel(modelUrl, mmprojUrl)
+                                } else {
+                                    viewModel.downloadModelFromUrl(modelUrl)
+                                }
                             },
                             onBackClicked = { navController.navigateUp() },
                         )
@@ -119,10 +125,10 @@ class DownloadModelActivity : ComponentActivity() {
                                 showProgressDialog()
                                 viewModel.fetchModelInfoAndTree(
                                     modelId,
-                                    onResult = { modelInfo, modelFiles ->
+                                    onResult = { modelInfo, modelFiles, mmprojFiles ->
                                         hideProgressDialog()
                                         navController.navigate(
-                                            ViewModelRoute(modelId, modelInfo, modelFiles)
+                                            ViewModelRoute(modelId, modelInfo, modelFiles, mmprojFiles)
                                         )
                                     },
                                 )
@@ -184,6 +190,13 @@ class DownloadModelActivity : ComponentActivity() {
                                 copyModelFile = { modelFileUri ->
                                     viewModel.copyModelFile(
                                         modelFileUri,
+                                        onComplete = { openChatActivity() },
+                                    )
+                                },
+                                copyVisionModelFile = { textUri, mmprojUri ->
+                                    viewModel.copyVisionModelFile(
+                                        textUri,
+                                        mmprojUri,
                                         onComplete = { openChatActivity() },
                                     )
                                 },

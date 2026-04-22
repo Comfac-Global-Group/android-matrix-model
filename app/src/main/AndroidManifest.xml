@@ -64,6 +64,11 @@
             android:exported="false"
             android:label="🩺 BP Log"
             android:theme="@style/Theme.AMM" />
+        <activity
+            android:name=".ui.screens.browser.BrowserActivity"
+            android:exported="false"
+            android:label="🌐 Browser"
+            android:theme="@style/Theme.AMM" />
 
         <service
             android:name=".llm.HttpService"

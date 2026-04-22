@@ -1,3 +1,31 @@
+## AMM v1.1.0 (2026-04-22)
+
+### New Features
+- **Paired Vision Model Download** — HuggingFace browser now detects and offers mmproj files
+  - Text models and mmproj files are shown in separate sections
+  - Checkbox to select/deselect mmproj before download
+  - Both files are enqueued via DownloadManager when checked
+- **Vision Model Import** — Import flow supports two-file (text + mmproj) registration
+  - Single-file import unchanged for text-only models
+  - New "Import Vision Model" path copies both GGUFs and marks `isVisionModel = true`
+- **Model Selector Vision Indicators** — Eye icon and mmproj status in model list
+  - `"MMProj: ready"` (green) when projector file exists
+  - `"MMProj: missing"` (red) when projector is absent or deleted
+- **Vision Hub DB Integration** — Scans registered vision models from Room database
+  - Shows text model + mmproj existence status for each registered vision model
+
+### Technical Changes
+- Extended `LLMModel` Room entity with `mmprojUrl`, `mmprojPath`, `isVisionModel`
+- Added Room migration `2 → 3` (three ALTER TABLE statements)
+- Updated `DownloadModelsViewModel` to split HF file tree into text/mmproj lists
+- Updated `ViewHFModelScreen` with checkbox-based mmproj selection
+- Updated `SelectModelsList` with eye icon and dynamic mmproj status label
+
+### Fixes
+- Addresses v1.0.0 known limitation: "Vision model download requires manual import"
+
+---
+
 ## AMM v1.0.0 (2026-04-20)
 
 **Rebrand:** SmolChat → AMM (Android Matrix Models)
